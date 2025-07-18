@@ -792,8 +792,16 @@ def predict_on_test_data():
         print(f"❌ Error loading test data: {e}")
         return None
     
-    # Step 2: Clean test text data
-    print("🧹 Cleaning test text data...")
+    # Step 2: Create labels and clean test text data
+    print("🧹 Processing test text data...")
+    
+    # Create labels if test data has 'offensive' column (for evaluation)
+    if 'offensive' in test_data.columns:
+        test_data = create_labels(test_data)
+        print("✅ Test labels created for evaluation")
+    else:
+        print("ℹ️ No labels in test data (prediction only)")
+    
     test_data['ocr_clean'] = test_data['ocr'].apply(enhanced_text_cleaning)
     
     # Step 3: Filter and validate test samples
@@ -928,6 +936,36 @@ def predict_on_test_data():
         print(f"Prediction: {row['predicted_class']} (confidence: {row['confidence']:.3f})")
         print(f"Hate probability: {row['hate_probability']:.3f}")
         print("-" * 30)
+    
+    # Step 13: Evaluate against true labels if available
+    if 'label' in test_results.columns:
+        print(f"\n📊 TEST EVALUATION METRICS:")
+        print("=" * 40)
+        
+        true_labels = test_results['label'].values
+        pred_labels = test_results['predicted_label'].values
+        
+        from sklearn.metrics import accuracy_score, precision_recall_fscore_support, roc_auc_score, classification_report
+        
+        test_accuracy = accuracy_score(true_labels, pred_labels)
+        test_precision, test_recall, test_f1, _ = precision_recall_fscore_support(
+            true_labels, pred_labels, average='weighted'
+        )
+        
+        try:
+            test_auc = roc_auc_score(true_labels, test_results['hate_probability'].values)
+        except:
+            test_auc = 0.0
+        
+        print(f"🎯 Test Accuracy: {test_accuracy:.4f} ({test_accuracy:.1%})")
+        print(f"📊 Test Precision: {test_precision:.4f}")
+        print(f"📊 Test Recall: {test_recall:.4f}")
+        print(f"📊 Test F1-Score: {test_f1:.4f}")
+        print(f"📊 Test AUC: {test_auc:.4f}")
+        
+        print(f"\n📋 DETAILED CLASSIFICATION REPORT:")
+        print(classification_report(true_labels, pred_labels, 
+                                  target_names=['Not Hate', 'Hate']))
     
     print(f"\n✅ TEST PREDICTIONS COMPLETE!")
     print(f"📁 Results saved in: {predictions_file}")
