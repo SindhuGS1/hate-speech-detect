@@ -772,3 +772,294 @@ if __name__ == "__main__":
     
     print("\n🎯 MISSION ACCOMPLISHED!")
     print("🛡️ VisualBERT + ViT optimized and ready for 90% accuracy!")
+
+# ============================================================================
+# 🔮 TEST DATA PREDICTION PIPELINE
+# ============================================================================
+
+def predict_on_test_data():
+    """Complete test data prediction pipeline"""
+    
+    print("\n🔮 STARTING TEST DATA PREDICTIONS")
+    print("=" * 50)
+    
+    # Step 1: Load test data
+    print("📁 Loading test data...")
+    try:
+        test_data = pd.read_csv(os.path.join(config.BASE_PATH, 'test.csv'))
+        print(f"✅ Test data loaded: {len(test_data)} samples")
+    except Exception as e:
+        print(f"❌ Error loading test data: {e}")
+        return None
+    
+    # Step 2: Clean test text data
+    print("🧹 Cleaning test text data...")
+    test_data['ocr_clean'] = test_data['ocr'].apply(enhanced_text_cleaning)
+    
+    # Step 3: Filter and validate test samples
+    print("🔍 Validating test samples...")
+    test_data = filter_and_validate_samples(test_data, "/content/testImages", "Test")
+    
+    if len(test_data) == 0:
+        print("❌ No valid test samples found!")
+        return None
+    
+    # Step 4: Extract test image features
+    print("🖼️ Extracting test image features...")
+    test_features = precompute_vit_features(test_data, "/content/testImages", "test")
+    
+    # Step 5: Load trained model and tokenizer
+    print("🧠 Loading trained model...")
+    model_path = os.path.join(config.OUTPUT_DIR, "optimized_visualbert_model")
+    
+    try:
+        # Load tokenizer
+        tokenizer = BertTokenizer.from_pretrained(model_path)
+        
+        # Load model
+        model = OptimizedVisualBERTClassifier(class_weights=[1.0, 1.0], device=device)
+        model_state = torch.load(os.path.join(model_path, "pytorch_model.bin"), map_location=device)
+        model.load_state_dict(model_state)
+        model.to(device)
+        model.eval()
+        
+        print("✅ Model loaded successfully!")
+        
+    except Exception as e:
+        print(f"❌ Error loading model: {e}")
+        print("💡 Make sure training completed successfully!")
+        return None
+    
+    # Step 6: Create test dataset
+    print("📊 Creating test dataset...")
+    test_dataset = OptimizedHatefulMemesDataset(
+        test_data, tokenizer, test_features, config.MAX_TEXT_LENGTH
+    )
+    
+    # Step 7: Create test dataloader
+    test_dataloader = DataLoader(
+        test_dataset,
+        batch_size=config.BATCH_SIZE,
+        shuffle=False,
+        collate_fn=data_collator,
+        num_workers=2
+    )
+    
+    # Step 8: Make predictions
+    print("🔮 Making predictions on test data...")
+    
+    all_predictions = []
+    all_probabilities = []
+    all_ids = []
+    
+    with torch.no_grad():
+        for batch in tqdm(test_dataloader, desc="Predicting"):
+            # Move batch to device
+            batch = {k: v.to(device) for k, v in batch.items() if k != 'labels'}
+            
+            # Forward pass
+            outputs = model(**batch)
+            logits = outputs['logits']
+            
+            # Get predictions and probabilities
+            probabilities = torch.softmax(logits, dim=1)
+            predictions = torch.argmax(logits, dim=1)
+            
+            all_predictions.extend(predictions.cpu().numpy())
+            all_probabilities.extend(probabilities.cpu().numpy())
+    
+    # Step 9: Create predictions DataFrame
+    print("📊 Creating predictions DataFrame...")
+    
+    # Get sample IDs
+    all_ids = test_data['id'].tolist()[:len(all_predictions)]
+    
+    predictions_df = pd.DataFrame({
+        'id': all_ids,
+        'predicted_label': all_predictions,
+        'predicted_class': ['hate' if pred == 1 else 'not_hate' for pred in all_predictions],
+        'hate_probability': [prob[1] for prob in all_probabilities],
+        'not_hate_probability': [prob[0] for prob in all_probabilities],
+        'confidence': [max(prob) for prob in all_probabilities]
+    })
+    
+    # Step 10: Add original data for reference
+    test_results = test_data.merge(predictions_df, on='id', how='inner')
+    
+    # Step 11: Save predictions
+    predictions_file = os.path.join(config.OUTPUT_DIR, "test_predictions.csv")
+    test_results.to_csv(predictions_file, index=False)
+    
+    print(f"💾 Predictions saved to: {predictions_file}")
+    
+    # Step 12: Display prediction summary
+    print("\n📊 TEST PREDICTIONS SUMMARY:")
+    print("=" * 40)
+    
+    hate_count = sum(all_predictions)
+    total_count = len(all_predictions)
+    
+    print(f"📊 Total samples predicted: {total_count}")
+    print(f"🔴 Predicted as HATE: {hate_count} ({hate_count/total_count*100:.1f}%)")
+    print(f"🟢 Predicted as NOT HATE: {total_count-hate_count} ({(total_count-hate_count)/total_count*100:.1f}%)")
+    
+    # High confidence predictions
+    high_conf_hate = predictions_df[
+        (predictions_df['predicted_label'] == 1) & 
+        (predictions_df['confidence'] > 0.9)
+    ]
+    high_conf_not_hate = predictions_df[
+        (predictions_df['predicted_label'] == 0) & 
+        (predictions_df['confidence'] > 0.9)
+    ]
+    
+    print(f"\n🎯 HIGH CONFIDENCE PREDICTIONS (>90%):")
+    print(f"   🔴 High confidence HATE: {len(high_conf_hate)} samples")
+    print(f"   🟢 High confidence NOT HATE: {len(high_conf_not_hate)} samples")
+    
+    # Show some sample predictions
+    print(f"\n📋 SAMPLE PREDICTIONS:")
+    print("-" * 50)
+    
+    for i in range(min(5, len(test_results))):
+        row = test_results.iloc[i]
+        print(f"ID: {row['id']}")
+        print(f"Text: {row['ocr_clean'][:100]}...")
+        print(f"Prediction: {row['predicted_class']} (confidence: {row['confidence']:.3f})")
+        print(f"Hate probability: {row['hate_probability']:.3f}")
+        print("-" * 30)
+    
+    print(f"\n✅ TEST PREDICTIONS COMPLETE!")
+    print(f"📁 Results saved in: {predictions_file}")
+    print("🔮 Ready for submission or further analysis!")
+    
+    return test_results
+
+def predict_single_sample(image_path, text, model=None, tokenizer=None):
+    """Predict on a single new sample"""
+    
+    print(f"🔮 Predicting single sample...")
+    
+    if model is None or tokenizer is None:
+        print("📥 Loading model and tokenizer...")
+        model_path = os.path.join(config.OUTPUT_DIR, "optimized_visualbert_model")
+        
+        tokenizer = BertTokenizer.from_pretrained(model_path)
+        model = OptimizedVisualBERTClassifier(class_weights=[1.0, 1.0], device=device)
+        model_state = torch.load(os.path.join(model_path, "pytorch_model.bin"), map_location=device)
+        model.load_state_dict(model_state)
+        model.to(device)
+        model.eval()
+    
+    # Process text
+    clean_text = enhanced_text_cleaning(text)
+    
+    # Process image
+    image_processor, vit_model = get_vit_processor_and_model()
+    
+    try:
+        image = Image.open(image_path).convert('RGB')
+        inputs = image_processor(images=[image], return_tensors="pt").to(device)
+        
+        with torch.no_grad():
+            vit_outputs = vit_model(**inputs)
+            visual_embeds = vit_outputs.last_hidden_state.squeeze(0).cpu().numpy()
+    except:
+        print("⚠️ Error processing image, using zero features")
+        visual_embeds = np.zeros((config.NUM_VISUAL_TOKENS, config.HIDDEN_DIM), dtype=np.float32)
+    
+    # Tokenize text
+    encoded = tokenizer(
+        clean_text,
+        padding="max_length",
+        max_length=config.MAX_TEXT_LENGTH,
+        truncation=True,
+        return_tensors="pt"
+    )
+    
+    # Prepare inputs
+    inputs = {
+        'input_ids': encoded['input_ids'].to(device),
+        'attention_mask': encoded['attention_mask'].to(device),
+        'token_type_ids': torch.zeros_like(encoded['input_ids']).to(device),
+        'visual_embeds': torch.FloatTensor(visual_embeds).unsqueeze(0).to(device),
+        'visual_attention_mask': torch.ones(config.NUM_VISUAL_TOKENS).unsqueeze(0).to(device),
+        'visual_token_type_ids': torch.ones(config.NUM_VISUAL_TOKENS).unsqueeze(0).to(device)
+    }
+    
+    # Make prediction
+    with torch.no_grad():
+        outputs = model(**inputs)
+        logits = outputs['logits']
+        probabilities = torch.softmax(logits, dim=1)
+        prediction = torch.argmax(logits, dim=1)
+    
+    hate_prob = probabilities[0][1].item()
+    not_hate_prob = probabilities[0][0].item()
+    predicted_class = 'hate' if prediction[0].item() == 1 else 'not_hate'
+    confidence = max(hate_prob, not_hate_prob)
+    
+    print(f"\n🔮 PREDICTION RESULTS:")
+    print(f"   Text: {clean_text[:100]}...")
+    print(f"   Prediction: {predicted_class.upper()}")
+    print(f"   Confidence: {confidence:.3f}")
+    print(f"   Hate probability: {hate_prob:.3f}")
+    print(f"   Not hate probability: {not_hate_prob:.3f}")
+    
+    return {
+        'prediction': predicted_class,
+        'confidence': confidence,
+        'hate_probability': hate_prob,
+        'not_hate_probability': not_hate_prob
+    }
+
+# ============================================================================
+# 🔮 COMPLETE PIPELINE WITH TEST PREDICTIONS
+# ============================================================================
+
+def run_complete_pipeline():
+    """Run training + test predictions in one go"""
+    
+    print("🚀 RUNNING COMPLETE PIPELINE")
+    print("🎯 Training + Test Predictions")
+    print("=" * 60)
+    
+    # Step 1: Train the model
+    print("🧠 Step 1: Training optimized model...")
+    training_results = main_optimized_visualbert_pipeline()
+    
+    # Step 2: Predict on test data
+    print("\n🔮 Step 2: Making test predictions...")
+    test_results = predict_on_test_data()
+    
+    if test_results is not None:
+        print("\n🎉 COMPLETE PIPELINE FINISHED!")
+        print("✅ Model trained successfully")
+        print("✅ Test predictions completed")
+        print("📊 Results saved in model_outputs/")
+        
+        return {
+            'training_results': training_results,
+            'test_results': test_results
+        }
+    else:
+        print("\n⚠️ Test predictions failed")
+        return {'training_results': training_results}
+
+# ============================================================================
+# 🚀 EXECUTION OPTIONS
+# ============================================================================
+
+# Uncomment one of these to run:
+
+# Option 1: Training only
+results = main_optimized_visualbert_pipeline()
+
+# Option 2: Training + Test predictions
+# results = run_complete_pipeline()
+
+# Option 3: Test predictions only (after training)
+# test_results = predict_on_test_data()
+
+# Option 4: Single sample prediction (example)
+# prediction = predict_single_sample("path/to/image.jpg", "Your meme text here")
