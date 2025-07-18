@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 🚀 OPTIMIZED Memotion 3.0 - VisualBERT + ViT Architecture
 🎯 Target: 90% Accuracy | ⚡ Feature Caching | 🛡️ Error-Free
@@ -759,21 +758,6 @@ def main_optimized_visualbert_pipeline():
     return eval_results
 
 # ============================================================================
-# 🚀 RUN THE OPTIMIZED PIPELINE
-# ============================================================================
-
-if __name__ == "__main__":
-    print("🎉 OPTIMIZED VisualBERT + ViT READY!")
-    print("📋 Keeping YOUR original architecture with optimizations")
-    print("🎯 Targeting 90% accuracy with speed improvements")
-    
-    # Run the optimized pipeline
-    results = main_optimized_visualbert_pipeline()
-    
-    print("\n🎯 MISSION ACCOMPLISHED!")
-    print("🛡️ VisualBERT + ViT optimized and ready for 90% accuracy!")
-
-# ============================================================================
 # 🔮 TEST DATA PREDICTION PIPELINE
 # ============================================================================
 
@@ -945,8 +929,6 @@ def predict_on_test_data():
         true_labels = test_results['label'].values
         pred_labels = test_results['predicted_label'].values
         
-        from sklearn.metrics import accuracy_score, precision_recall_fscore_support, roc_auc_score, classification_report
-        
         test_accuracy = accuracy_score(true_labels, pred_labels)
         test_precision, test_recall, test_f1, _ = precision_recall_fscore_support(
             true_labels, pred_labels, average='weighted'
@@ -1085,19 +1067,28 @@ def run_complete_pipeline():
         return {'training_results': training_results}
 
 # ============================================================================
-# 🚀 EXECUTION OPTIONS
+# 🚀 EXECUTION - RUN THE COMPLETE OPTIMIZED PIPELINE
 # ============================================================================
 
-# Uncomment one of these to run:
+print("🎉 OPTIMIZED VisualBERT + ViT READY!")
+print("📋 Keeping YOUR original architecture with optimizations")
+print("🎯 Targeting 90% accuracy with speed improvements")
 
-# Option 1: Training only
+# Run the optimized pipeline (TRAINING ONLY by default)
 results = main_optimized_visualbert_pipeline()
 
-# Option 2: Training + Test predictions
-# results = run_complete_pipeline()
+print("\n🎯 TRAINING COMPLETED!")
+print("🛡️ VisualBERT + ViT optimized and ready!")
 
-# Option 3: Test predictions only (after training)
+# ============================================================================
+# 🔮 TO RUN TEST PREDICTIONS (Uncomment after training)
+# ============================================================================
+
+# Uncomment these lines to run test predictions after training:
+# print("\n🔮 Running test predictions...")
 # test_results = predict_on_test_data()
 
-# Option 4: Single sample prediction (example)
-# prediction = predict_single_sample("path/to/image.jpg", "Your meme text here")
+# Or run complete pipeline (training + test predictions):
+# results = run_complete_pipeline()
+
+print("\n✅ READY TO ACHIEVE 90% ACCURACY! 🎯")
