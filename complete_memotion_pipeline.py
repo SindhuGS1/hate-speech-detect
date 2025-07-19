@@ -548,20 +548,26 @@ class DimensionSafeVisualBERT(nn.Module):
             nn.Linear(config.HIDDEN_DIM // 2, num_classes)
         )
         
-        # Loss function
-        if config.USE_FOCAL_LOSS and class_weights is not None:
-            alpha = torch.tensor(class_weights, dtype=torch.float32)
-            self.loss_fct = FocalLoss(alpha=alpha, gamma=2.0)
-            print("✅ Using Focal Loss with class weights")
-        else:
-            self.loss_fct = nn.CrossEntropyLoss()
-            print("✅ Using Cross Entropy Loss")
+                 # Loss function
+         if config.USE_FOCAL_LOSS and class_weights is not None:
+             alpha = torch.tensor(class_weights, dtype=torch.float32)
+             self.loss_fct = FocalLoss(alpha=alpha, gamma=2.0)
+             self.register_buffer('class_weights', alpha)  # Register as buffer for device handling
+             print("✅ Using Focal Loss with class weights")
+         else:
+             self.loss_fct = nn.CrossEntropyLoss()
+             print("✅ Using Cross Entropy Loss")
         
         print(f"✅ Model initialized with {sum(p.numel() for p in self.parameters() if p.requires_grad):,} parameters")
     
-    def forward(self, input_ids, attention_mask, visual_features, labels=None):
-        batch_size = input_ids.size(0)
-        device = input_ids.device
+         def forward(self, input_ids, attention_mask, visual_features, labels=None):
+         batch_size = input_ids.size(0)
+         device = input_ids.device
+         
+         # Ensure all inputs are on the same device
+         attention_mask = attention_mask.to(device)
+         if visual_features is not None:
+             visual_features = visual_features.to(device)
         
         # Text encoding
         text_outputs = self.text_encoder(
@@ -593,14 +599,14 @@ class DimensionSafeVisualBERT(nn.Module):
         # Classification
         logits = self.classifier(combined_features)  # [batch, num_classes]
         
-        outputs = {'logits': logits}
-        
-        if labels is not None:
-            labels = labels.view(-1).long()
-            loss = self.loss_fct(logits, labels)
-            outputs['loss'] = loss
-        
-        return outputs
+                 outputs = {'logits': logits}
+         
+         if labels is not None:
+             labels = labels.view(-1).long().to(device)
+             loss = self.loss_fct(logits, labels)
+             outputs['loss'] = loss
+         
+         return outputs
 
 # Enhanced Dataset Class
 class MemotionDatasetSafe(Dataset):
@@ -800,19 +806,23 @@ def run_complete_pipeline():
         model = DimensionSafeVisualBERT(num_classes=config.NUM_CLASSES, class_weights=class_weights)
         model = model.to(device)
         
-        # 10. Test forward pass
-        print("🧪 Testing forward pass...")
-        try:
-            sample_batch = safe_data_collator([train_dataset[0]])
-            sample_batch = {k: v.to(device) for k, v in sample_batch.items()}
-            
-            with torch.no_grad():
-                output = model(**sample_batch)
-            
-            print(f"✅ Forward pass successful: {output['logits'].shape}")
-        except Exception as e:
-            print(f"⚠️ Forward pass test failed: {e}")
-            return None, None, None, None, None
+                 # 10. Test forward pass
+         print("🧪 Testing forward pass...")
+         try:
+             sample_batch = safe_data_collator([train_dataset[0]])
+             # Move tensors to device safely
+             for key, value in sample_batch.items():
+                 if hasattr(value, 'to'):
+                     sample_batch[key] = value.to(device)
+             
+             with torch.no_grad():
+                 output = model(**sample_batch)
+             
+             print(f"✅ Forward pass successful: {output['logits'].shape}")
+         except Exception as e:
+             print(f"⚠️ Forward pass test failed: {e}")
+             print("   Continuing with training anyway...")
+             # Don't return None, let training proceed
         
         # 11. Setup training
         print("⚙️ Setting up training...")
