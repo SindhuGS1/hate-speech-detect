@@ -445,7 +445,9 @@ class FocalLoss(nn.Module):
         
         if self.alpha is not None:
             if isinstance(self.alpha, torch.Tensor):
-                alpha_t = self.alpha[targets]
+                # Ensure alpha is on the same device as targets
+                alpha_device = self.alpha.to(targets.device)
+                alpha_t = alpha_device[targets]
             else:
                 alpha_t = self.alpha
             focal_loss = alpha_t * (1 - pt) ** self.gamma * ce_loss
@@ -497,7 +499,8 @@ class DimensionSafeVisualBERT(nn.Module):
         if config.USE_FOCAL_LOSS and class_weights is not None:
             alpha = torch.tensor(class_weights, dtype=torch.float32)
             self.loss_fct = FocalLoss(alpha=alpha, gamma=2.0)
-            self.register_buffer('class_weights', alpha)
+            # Register as buffer so it moves with the model to correct device
+            self.register_buffer('focal_alpha', alpha)
             print("✅ Using Focal Loss with class weights")
         else:
             self.loss_fct = nn.CrossEntropyLoss()
@@ -509,9 +512,12 @@ class DimensionSafeVisualBERT(nn.Module):
         batch_size = input_ids.size(0)
         device = input_ids.device
         
+        # Ensure all inputs are on the same device
         attention_mask = attention_mask.to(device)
         if visual_features is not None:
             visual_features = visual_features.to(device)
+        if labels is not None:
+            labels = labels.to(device)
         
         text_outputs = self.text_encoder(
             input_ids=input_ids,
@@ -539,7 +545,7 @@ class DimensionSafeVisualBERT(nn.Module):
         outputs = {'logits': logits}
         
         if labels is not None:
-            labels = labels.view(-1).long().to(device)
+            labels = labels.view(-1).long()
             loss = self.loss_fct(logits, labels)
             outputs['loss'] = loss
         
@@ -719,6 +725,11 @@ def run_complete_pipeline():
         print("🧠 Initializing model...")
         model = DimensionSafeVisualBERT(num_classes=config.NUM_CLASSES, class_weights=class_weights)
         model = model.to(device)
+        
+        # Ensure CUDA synchronization
+        if device.type == 'cuda':
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
         
         print("🧪 Testing forward pass...")
         try:
