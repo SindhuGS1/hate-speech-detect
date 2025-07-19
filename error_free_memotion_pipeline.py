@@ -736,29 +736,29 @@ def run_complete_pipeline():
             print("   Continuing with training anyway...")
         
         print("⚙️ Setting up training...")
-        training_args = TrainingArguments(
-            output_dir=config.OUTPUT_DIR,
-            num_train_epochs=config.NUM_EPOCHS,
-            per_device_train_batch_size=config.BATCH_SIZE,
-            per_device_eval_batch_size=config.BATCH_SIZE,
-            gradient_accumulation_steps=config.GRADIENT_ACCUMULATION_STEPS,
-            learning_rate=config.LEARNING_RATE,
-            weight_decay=config.WEIGHT_DECAY,
-            warmup_ratio=config.WARMUP_RATIO,
-            logging_steps=50,
-            evaluation_strategy="steps" if val_dataset else "no",
-            eval_steps=200 if val_dataset else None,
-            save_steps=500,
-            save_total_limit=3,
-            load_best_model_at_end=True if val_dataset else False,
-            metric_for_best_model="f1_macro" if val_dataset else None,
-            greater_is_better=True,
-            fp16=config.USE_MIXED_PRECISION,
-            dataloader_pin_memory=False,
-            remove_unused_columns=False,
-            report_to="none",
-            seed=42
-        )
+                 training_args = TrainingArguments(
+             output_dir=config.OUTPUT_DIR,
+             num_train_epochs=config.NUM_EPOCHS,
+             per_device_train_batch_size=config.BATCH_SIZE,
+             per_device_eval_batch_size=config.BATCH_SIZE,
+             gradient_accumulation_steps=config.GRADIENT_ACCUMULATION_STEPS,
+             learning_rate=config.LEARNING_RATE,
+             weight_decay=config.WEIGHT_DECAY,
+             warmup_ratio=config.WARMUP_RATIO,
+             logging_steps=50,
+             evaluation_strategy="steps" if val_dataset else "no",
+             eval_steps=200 if val_dataset else None,
+             save_steps=200 if val_dataset else 500,  # Must be multiple of eval_steps
+             save_total_limit=3,
+             load_best_model_at_end=True if val_dataset else False,
+             metric_for_best_model="f1_macro" if val_dataset else None,
+             greater_is_better=True,
+             fp16=config.USE_MIXED_PRECISION,
+             dataloader_pin_memory=False,
+             remove_unused_columns=False,
+             report_to="none",
+             seed=42
+         )
         
         trainer = Trainer(
             model=model,
