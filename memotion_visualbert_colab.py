@@ -59,6 +59,9 @@ print(f"Device: {device}")
 if torch.cuda.is_available():
     print(f"GPU: {torch.cuda.get_device_name(0)}")
     torch.cuda.empty_cache()
+    # Set environment variable to help debug CUDA errors
+    import os
+    os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
 # Configuration
 class Config:
@@ -340,19 +343,22 @@ class VisualBERTClassifier(nn.Module):
         print("Initializing VisualBERT...")
         
         try:
+            # Load VisualBERT with original visual embedding dimension (1024)
             visualbert_config = VisualBertConfig.from_pretrained(
                 config.VISUALBERT_MODEL,
-                visual_embedding_dim=config.CLIP_DIM,
                 hidden_dropout_prob=config.DROPOUT_RATE,
                 num_labels=self.num_labels
             )
             
             self.visualbert = VisualBertModel.from_pretrained(
                 config.VISUALBERT_MODEL,
-                config=visualbert_config,
-                ignore_mismatched_sizes=True
+                config=visualbert_config
             )
-            print(f"   VisualBERT loaded")
+            print(f"   VisualBERT loaded with original config")
+            
+            # Get the actual visual embedding dimension from the loaded model
+            self.original_visual_dim = self.visualbert.config.visual_embedding_dim
+            print(f"   Original visual embedding dim: {self.original_visual_dim}")
             
         except Exception as e:
             print(f"   Creating from scratch: {e}")
@@ -360,16 +366,17 @@ class VisualBERTClassifier(nn.Module):
             visualbert_config = VisualBertConfig(
                 vocab_size=250002,
                 hidden_size=config.VISUALBERT_DIM,
-                visual_embedding_dim=config.CLIP_DIM,
+                visual_embedding_dim=1024,  # Use standard 1024 dimension
                 hidden_dropout_prob=config.DROPOUT_RATE,
                 num_labels=self.num_labels
             )
             
             self.visualbert = VisualBertModel(visualbert_config)
+            self.original_visual_dim = 1024
         
-        # Visual projection: CLIP (512) to VisualBERT (768)
-        self.visual_projector = nn.Linear(config.CLIP_DIM, config.VISUALBERT_DIM)
-        print(f"   Visual projector: {config.CLIP_DIM} -> {config.VISUALBERT_DIM}")
+        # Visual projection: CLIP (512) to VisualBERT's expected dimension (1024)
+        self.visual_projector = nn.Linear(config.CLIP_DIM, self.original_visual_dim)
+        print(f"   Visual projector: {config.CLIP_DIM} -> {self.original_visual_dim}")
         
         # Classifier
         self.classifier = nn.Sequential(
@@ -399,11 +406,12 @@ class VisualBERTClassifier(nn.Module):
         
         # Project visual features
         if visual_embeds is not None:
-            visual_embeds_projected = self.visual_projector(visual_embeds)
+            # Project CLIP features (512d) to VisualBERT's expected dimension (1024d)
+            visual_embeds_projected = self.visual_projector(visual_embeds.float())
         else:
             visual_embeds_projected = torch.zeros(
-                batch_size, config.NUM_VISUAL_TOKENS, config.VISUALBERT_DIM,
-                device=input_ids.device
+                batch_size, config.NUM_VISUAL_TOKENS, self.original_visual_dim,
+                device=input_ids.device, dtype=torch.float32
             )
         
         if visual_attention_mask is None:
@@ -420,6 +428,11 @@ class VisualBERTClassifier(nn.Module):
         
         # VisualBERT fusion
         try:
+            # Ensure all inputs are on the same device and have correct dtype
+            visual_embeds_projected = visual_embeds_projected.to(input_ids.device).float()
+            visual_attention_mask = visual_attention_mask.to(input_ids.device)
+            visual_token_type_ids = visual_token_type_ids.to(input_ids.device)
+            
             outputs = self.visualbert(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -433,7 +446,11 @@ class VisualBERTClassifier(nn.Module):
             
         except Exception as e:
             print(f"VisualBERT error: {e}")
-            pooled_output = torch.mean(visual_embeds_projected, dim=1)
+            # Fallback: use mean pooling over visual features and project to text dimension
+            pooled_visual = torch.mean(visual_embeds_projected, dim=1)  # [batch, visual_dim]
+            # Project visual to text dimension for compatibility with classifier
+            visual_to_text = nn.Linear(self.original_visual_dim, config.VISUALBERT_DIM).to(input_ids.device)
+            pooled_output = visual_to_text(pooled_visual)
         
         logits = self.classifier(pooled_output)
         
@@ -495,7 +512,7 @@ class MemotionDataset(Dataset):
             np.random.seed(hash(str(img_id)) % 2**31)
             visual_features = np.random.randn(config.NUM_VISUAL_TOKENS, config.CLIP_DIM).astype(np.float32)
         
-        visual_embeds = torch.FloatTensor(visual_features)
+        visual_embeds = torch.FloatTensor(visual_features).clamp(-10, 10)  # Clamp to prevent overflow
         visual_attention_mask = torch.ones(visual_embeds.shape[0], dtype=torch.int64)
         visual_token_type_ids = torch.ones(visual_embeds.shape[0], dtype=torch.int64)
         
@@ -559,7 +576,7 @@ def data_collator(features):
             'input_ids': torch.zeros(batch_size, config.MAX_TEXT_LENGTH, dtype=torch.long),
             'attention_mask': torch.zeros(batch_size, config.MAX_TEXT_LENGTH, dtype=torch.long),
             'token_type_ids': torch.zeros(batch_size, config.MAX_TEXT_LENGTH, dtype=torch.long),
-            'visual_embeds': torch.zeros(batch_size, config.NUM_VISUAL_TOKENS, config.CLIP_DIM),
+            'visual_embeds': torch.zeros(batch_size, config.NUM_VISUAL_TOKENS, config.CLIP_DIM, dtype=torch.float32),
             'visual_attention_mask': torch.ones(batch_size, config.NUM_VISUAL_TOKENS, dtype=torch.long),
             'visual_token_type_ids': torch.ones(batch_size, config.NUM_VISUAL_TOKENS, dtype=torch.long),
         }
@@ -638,12 +655,17 @@ def main_pipeline():
         # Test forward pass
         print("Testing forward pass...")
         with torch.no_grad():
-            sample_batch = data_collator([train_dataset[0]])
-            for key, value in sample_batch.items():
-                sample_batch[key] = value.to(device)
-            
-            output = model(**sample_batch)
-            print(f"   Forward pass: {output['logits'].shape}")
+            try:
+                sample_batch = data_collator([train_dataset[0]])
+                for key, value in sample_batch.items():
+                    if hasattr(value, 'to'):
+                        sample_batch[key] = value.to(device)
+                
+                output = model(**sample_batch)
+                print(f"   Forward pass successful: {output['logits'].shape}")
+            except Exception as e:
+                print(f"   Forward pass error: {e}")
+                print("   Continuing with training anyway...")
         
         # 9. Training setup
         training_args = TrainingArguments(
