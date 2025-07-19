@@ -53,15 +53,40 @@ from transformers import (
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, roc_auc_score
 from sklearn.utils.class_weight import compute_class_weight
 
-# Device Setup
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"Device: {device}")
-if torch.cuda.is_available():
-    print(f"GPU: {torch.cuda.get_device_name(0)}")
-    torch.cuda.empty_cache()
-    # Set environment variable to help debug CUDA errors
-    import os
-    os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+# Device Setup with CUDA error handling
+def setup_device():
+    """Setup device with proper CUDA error handling"""
+    try:
+        if torch.cuda.is_available():
+            # Test CUDA functionality
+            test_tensor = torch.tensor([1.0]).cuda()
+            _ = test_tensor + 1
+            device = torch.device('cuda')
+            print(f"Device: {device}")
+            print(f"GPU: {torch.cuda.get_device_name(0)}")
+            
+            # Clear cache and reset
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            
+            # Set environment variables for debugging
+            import os
+            os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+            os.environ['TORCH_USE_CUDA_DSA'] = '1'
+            
+            return device
+        else:
+            device = torch.device('cpu')
+            print(f"Device: {device} (CUDA not available)")
+            return device
+            
+    except Exception as e:
+        print(f"CUDA error detected: {e}")
+        print("Falling back to CPU...")
+        device = torch.device('cpu')
+        return device
+
+device = setup_device()
 
 # Configuration
 class Config:
@@ -704,10 +729,32 @@ def data_collator(features):
         }
 
 # Main Pipeline
+def reset_cuda_state():
+    """Reset CUDA state to prevent device-side assertion errors"""
+    try:
+        if torch.cuda.is_available():
+            print("Resetting CUDA state...")
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            
+            # Reset random states
+            torch.manual_seed(42)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed(42)
+                torch.cuda.manual_seed_all(42)
+            
+            print("CUDA state reset successfully")
+    except Exception as e:
+        print(f"Error resetting CUDA state: {e}")
+        print("Continuing anyway...")
+
 def main_pipeline():
     """Main verified pipeline"""
     print("STARTING VERIFIED PIPELINE")
     print("="*60)
+    
+    # Reset CUDA state first
+    reset_cuda_state()
     
     try:
         # 1. Extract images
@@ -813,28 +860,64 @@ def main_pipeline():
             remove_unused_columns=False
         )
         
-        # 10. Initialize trainer
-        trainer = Trainer(
-            model=model,
-            args=training_args,
-            train_dataset=train_dataset,
-            eval_dataset=val_dataset,
-            data_collator=data_collator,
-            compute_metrics=compute_metrics_macro_f1 if val_dataset else None,
-            callbacks=[EarlyStoppingCallback(early_stopping_patience=5)] if val_dataset else []
-        )
+        # 10. Initialize trainer with CUDA error handling
+        try:
+            trainer = Trainer(
+                model=model,
+                args=training_args,
+                train_dataset=train_dataset,
+                eval_dataset=val_dataset,
+                data_collator=data_collator,
+                compute_metrics=compute_metrics_macro_f1 if val_dataset else None,
+                callbacks=[EarlyStoppingCallback(early_stopping_patience=5)] if val_dataset else []
+            )
+        except RuntimeError as e:
+            if "CUDA" in str(e):
+                print(f"CUDA error during trainer initialization: {e}")
+                print("Switching to CPU and trying again...")
+                
+                # Move model to CPU
+                model = model.cpu()
+                global device
+                device = torch.device('cpu')
+                
+                # Update training args for CPU
+                training_args.fp16 = False  # Disable mixed precision on CPU
+                training_args.dataloader_pin_memory = False
+                
+                trainer = Trainer(
+                    model=model,
+                    args=training_args,
+                    train_dataset=train_dataset,
+                    eval_dataset=val_dataset,
+                    data_collator=data_collator,
+                    compute_metrics=compute_metrics_macro_f1 if val_dataset else None,
+                    callbacks=[EarlyStoppingCallback(early_stopping_patience=5)] if val_dataset else []
+                )
+            else:
+                raise e
         
-        # 11. Start training
+        # 11. Start training with error handling
         print(f"\nStarting training...")
         print(f"Architecture:")
         print(f"   Text: XLM-RoBERTa -> VisualBERT ({config.VISUALBERT_DIM}d)")
-        print(f"   Visual: CLIP {config.VISUAL_ENCODER} ({config.CLIP_DIM}d) -> Projection ({config.VISUALBERT_DIM}d)")
+        print(f"   Visual: CLIP {config.VISUAL_ENCODER} ({config.CLIP_DIM}d) -> Projection (1024d)")
         print(f"   Fusion: VisualBERT Cross-Modal Attention")
+        print(f"   Device: {device}")
         print(f"Language: Hindi + English")
         print(f"Evaluation: Macro F1-Score")
         
-        training_result = trainer.train()
-        print("Training completed!")
+        try:
+            training_result = trainer.train()
+            print("Training completed!")
+        except RuntimeError as e:
+            if "CUDA" in str(e):
+                print(f"CUDA error during training: {e}")
+                print("This might be due to memory issues or corrupted CUDA state.")
+                print("Try restarting the runtime and running again.")
+                return None, None, None, None, None
+            else:
+                raise e
         
         # 12. Evaluate
         eval_results = {}
