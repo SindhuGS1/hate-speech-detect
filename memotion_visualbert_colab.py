@@ -158,158 +158,41 @@ def extract_images():
 
 def load_data():
     """Load dataset files with robust CSV parsing"""
-    print("Loading Memotion 3.0 dataset...")
-    
-    datasets = {}
-    for split in ['train', 'val', 'test']:
-        csv_path = os.path.join(config.BASE_PATH, f'{split}.csv')
+    print("📁 Loading Memotion 3.0 dataset...")
+    try:
+        # Load train data
+        train_df = pd.read_csv(os.path.join(config.BASE_PATH, 'train.csv'))
+        print(f"✅ Train data: {len(train_df)} samples")
         
-        if not os.path.exists(csv_path):
-            print(f"File not found: {csv_path}")
-            continue
-            
+        # Load validation data with fallback for different formats
         try:
-            # Try multiple approaches to load CSV
-            df = None
-            
-            # Approach 1: Standard pandas read_csv
+            val_df = pd.read_csv(os.path.join(config.BASE_PATH, 'val.csv'))
+        except:
+            val_df = pd.read_csv(os.path.join(config.BASE_PATH, 'val.csv'), sep='\t', on_bad_lines='skip')
+        print(f"✅ Validation data: {len(val_df)} samples")
+        
+        # Load test data (optional)
+        try:
+            test_df = pd.read_csv(os.path.join(config.BASE_PATH, 'test.csv'))
+            print(f"✅ Test data: {len(test_df)} samples")
+        except:
             try:
-                df = pd.read_csv(csv_path, encoding='utf-8')
-                print(f"{split}: {len(df)} samples (UTF-8)")
+                test_df = pd.read_csv(os.path.join(config.BASE_PATH, 'test.csv'), sep='\t', on_bad_lines='skip')
+                print(f"✅ Test data: {len(test_df)} samples")
             except:
-                pass
-            
-            # Approach 2: Latin-1 encoding
-            if df is None:
-                try:
-                    df = pd.read_csv(csv_path, encoding='latin-1')
-                    print(f"{split}: {len(df)} samples (Latin-1)")
-                except:
-                    pass
-            
-            # Approach 3: Handle CSV parsing errors (try both old and new pandas syntax)
-            if df is None:
-                try:
-                    # New pandas syntax (>=1.3.0)
-                    df = pd.read_csv(csv_path, encoding='utf-8', on_bad_lines='skip')
-                    print(f"{split}: {len(df)} samples (on_bad_lines=skip)")
-                except:
-                    try:
-                        # Old pandas syntax (<1.3.0)
-                        df = pd.read_csv(csv_path, encoding='utf-8', error_bad_lines=False, warn_bad_lines=True)
-                        print(f"{split}: {len(df)} samples (error_bad_lines=False)")
-                    except:
-                        pass
-            
-            # Approach 4: Use different separator or quote handling
-            if df is None:
-                try:
-                    df = pd.read_csv(csv_path, encoding='utf-8', sep=',', quotechar='"', skipinitialspace=True)
-                    print(f"{split}: {len(df)} samples (custom separators)")
-                except:
-                    pass
-            
-            # Approach 5: Read with flexible column handling
-            if df is None:
-                try:
-                    # Read first few lines to understand structure
-                    with open(csv_path, 'r', encoding='utf-8') as f:
-                        first_lines = [f.readline().strip() for _ in range(5)]
-                    
-                    print(f"First few lines of {split}.csv:")
-                    for i, line in enumerate(first_lines):
-                        print(f"  Line {i+1}: {line[:100]}...")
-                    
-                    # Try reading with flexible parameters
-                    try:
-                        df = pd.read_csv(csv_path, encoding='utf-8', on_bad_lines='skip')
-                        print(f"{split}: {len(df)} samples (flexible on_bad_lines=skip)")
-                    except:
-                        df = pd.read_csv(csv_path, encoding='utf-8', error_bad_lines=False)
-                        print(f"{split}: {len(df)} samples (flexible error_bad_lines=False)")
-                except:
-                    pass
-            
-            # Approach 6: Manual parsing if all else fails
-            if df is None:
-                print(f"Manual parsing for {split}.csv...")
-                try:
-                    lines = []
-                    with open(csv_path, 'r', encoding='utf-8') as f:
-                        header = f.readline().strip().split(',')
-                        for line_num, line in enumerate(f, 2):
-                            try:
-                                # Simple CSV parsing - split by comma but handle quotes
-                                fields = []
-                                current_field = ''
-                                in_quotes = False
-                                
-                                for char in line.strip():
-                                    if char == '"':
-                                        in_quotes = not in_quotes
-                                    elif char == ',' and not in_quotes:
-                                        fields.append(current_field.strip())
-                                        current_field = ''
-                                    else:
-                                        current_field += char
-                                
-                                if current_field:
-                                    fields.append(current_field.strip())
-                                
-                                # Pad or truncate to match header length
-                                while len(fields) < len(header):
-                                    fields.append('')
-                                fields = fields[:len(header)]
-                                
-                                lines.append(fields)
-                                
-                            except:
-                                print(f"  Skipping problematic line {line_num}")
-                                continue
-                    
-                    df = pd.DataFrame(lines, columns=header)
-                    print(f"{split}: {len(df)} samples (manual parsing)")
-                
-                except Exception as manual_error:
-                    print(f"Manual parsing failed: {manual_error}")
-            
-            # If still no dataframe, create a dummy one
-            if df is None:
-                print(f"Creating dummy dataset for {split}")
-                df = pd.DataFrame({
-                    'id': range(10),
-                    'ocr': ['dummy text'] * 10,
-                    'label': [0] * 10
-                })
-            
-            # Standardize columns
-            if 'id' not in df.columns:
-                df['id'] = df.index
-            
-            if 'ocr' not in df.columns:
-                if 'text' in df.columns:
-                    df['ocr'] = df['text']
-                else:
-                    df['ocr'] = 'dummy text'
-            
-            # Clean up any remaining NaN values
-            df = df.fillna('')
-            
-            print(f"Final {split} dataset: {len(df)} samples")
-            print(f"Columns: {list(df.columns)}")
-            
-            datasets[split] = df
-            
-        except Exception as e:
-            print(f"Error loading {split}: {e}")
-            print(f"Creating minimal dummy dataset for {split}")
-            datasets[split] = pd.DataFrame({
-                'id': range(5),
-                'ocr': ['dummy text'] * 5,
-                'label': [0] * 5
-            })
-    
-    return datasets.get('train'), datasets.get('val'), datasets.get('test')
+                print("⚠️ No test data found")
+                test_df = None
+        
+        # Clean column names
+        for df in [train_df, val_df] + ([test_df] if test_df is not None else []):
+            if 'Unnamed: 0' in df.columns:
+                df.rename(columns={'Unnamed: 0': 'id'}, inplace=True)
+        
+        return train_df, val_df, test_df
+        
+    except Exception as e:
+        print(f"❌ Error loading data: {e}")
+        raise
 
 def create_labels(df, split_name):
     """Create binary labels"""
@@ -356,6 +239,52 @@ def bilingual_text_cleaning(text):
     text = re.sub(r'[^\w\s.,!?\'"\\-\u0900-\u097F]', ' ', text)
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
+
+def filter_and_validate_samples(df, image_folder, dataset_name):
+    """Filter and validate samples for data quality"""
+    print(f"🔍 Filtering {dataset_name} samples...")
+    valid_samples = []
+    error_counts = {'empty_text': 0, 'missing_image': 0, 'corrupted_image': 0}
+    
+    for idx, row in tqdm(df.iterrows(), total=len(df), desc=f"Validating {dataset_name}"):
+        # Check text quality
+        text = str(row['ocr_clean']).strip()
+        if len(text) == 0:
+            error_counts['empty_text'] += 1
+            continue
+            
+        # Check image existence and quality
+        image_name = f"{row['id']}.jpg"
+        image_path = os.path.join(image_folder, image_name)
+        
+        if not os.path.exists(image_path):
+            error_counts['missing_image'] += 1
+            continue
+            
+        try:
+            with Image.open(image_path) as img:
+                # Check minimum image dimensions
+                if img.size[0] < 32 or img.size[1] < 32:
+                    error_counts['corrupted_image'] += 1
+                    continue
+        except:
+            error_counts['corrupted_image'] += 1
+            continue
+            
+        # If all checks pass, add to valid samples
+        row['image'] = image_name
+        valid_samples.append(row)
+    
+    # Create filtered dataframe
+    filtered_df = pd.DataFrame(valid_samples).reset_index(drop=True)
+    
+    # Print validation summary
+    print(f"✅ {dataset_name}: {len(filtered_df)}/{len(df)} valid samples ({len(filtered_df)/len(df)*100:.1f}%)")
+    print(f"   📝 Empty text: {error_counts['empty_text']}")
+    print(f"   🖼️ Missing images: {error_counts['missing_image']}")
+    print(f"   💥 Corrupted images: {error_counts['corrupted_image']}")
+    
+    return filtered_df
 
 # CLIP Feature Extraction
 def get_clip_model():
@@ -767,23 +696,43 @@ def main_pipeline():
             print("No training data!")
             return None, None, None, None, None
         
-        # 3. Preprocessing
-        print("Preprocessing...")
+        # 3. Preprocessing and data cleaning
+        print("🧹 Preprocessing and cleaning data...")
+        
+        # Create labels
         train_data = create_labels(train_data, 'train')
         val_data = create_labels(val_data, 'val') if val_data is not None else None
         test_data = create_labels(test_data, 'test') if test_data is not None else None
         
-        # Text cleaning
+        # Clean text data
+        print("📝 Cleaning text data...")
         train_data['ocr_clean'] = train_data['ocr'].apply(bilingual_text_cleaning)
         if val_data is not None:
             val_data['ocr_clean'] = val_data['ocr'].apply(bilingual_text_cleaning)
         if test_data is not None:
             test_data['ocr_clean'] = test_data['ocr'].apply(bilingual_text_cleaning)
         
-        print(f"Dataset sizes:")
+        print(f"📊 Initial dataset sizes:")
         print(f"   Train: {len(train_data)}")
         print(f"   Val: {len(val_data) if val_data is not None else 0}")
         print(f"   Test: {len(test_data) if test_data is not None else 0}")
+        
+        # Filter and validate samples (crucial data quality step)
+        print("\n🔍 Data Quality Validation...")
+        train_data = filter_and_validate_samples(train_data, config.TRAIN_IMAGES, "train")
+        if val_data is not None:
+            val_data = filter_and_validate_samples(val_data, config.VAL_IMAGES, "val")
+        if test_data is not None:
+            test_data = filter_and_validate_samples(test_data, config.TEST_IMAGES, "test")
+        
+        print(f"\n📊 Final cleaned dataset sizes:")
+        print(f"   Train: {len(train_data)}")
+        print(f"   Val: {len(val_data) if val_data is not None else 0}")
+        print(f"   Test: {len(test_data) if test_data is not None else 0}")
+        
+        if len(train_data) == 0:
+            print("❌ No valid training samples after filtering!")
+            return None, None, None, None, None
         
         # 4. Extract visual features
         print("Extracting visual features...")
