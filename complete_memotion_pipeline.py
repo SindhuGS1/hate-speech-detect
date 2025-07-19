@@ -729,6 +729,9 @@ def run_complete_pipeline():
     print("🚀 STARTING COMPLETE MEMOTION PIPELINE")
     print("=" * 60)
     
+    # Access global device variable
+    global device
+    
     try:
         # 1. Extract images
         print("📦 Extracting images...")
