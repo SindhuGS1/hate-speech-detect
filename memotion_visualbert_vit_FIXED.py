@@ -17,7 +17,7 @@ import re
 from transformers import (
     VisualBertModel, VisualBertConfig, VisualBertTokenizer,
     ViTImageProcessor, ViTModel,  # ✅ FIXED: ViTFeatureExtractor -> ViTImageProcessor
-    TrainingArguments, Trainer, EvalPrediction
+    TrainingArguments, Trainer, EvalPrediction, EarlyStoppingCallback  # ✅ ADD EARLY STOPPING
 )
 from torch.utils.data import Dataset, DataLoader
 from datasets import load_dataset
@@ -34,10 +34,17 @@ class Config:
     MAX_LENGTH = 128
     IMAGE_SIZE = 224
     
-    # Training
-    BATCH_SIZE = 8  # Reduced for memory efficiency
-    NUM_EPOCHS = 3
-    LEARNING_RATE = 2e-5
+    # ✅ IMPROVED TRAINING PARAMETERS TO FIX LOW ACCURACY
+    BATCH_SIZE = 16  # ✅ INCREASED: Better gradient estimates (was 8)
+    NUM_EPOCHS = 15  # ✅ MORE EPOCHS: But with early stopping (was 3)
+    LEARNING_RATE = 5e-6  # ✅ MUCH LOWER: More stable training (was 2e-5)
+    WEIGHT_DECAY = 0.1  # ✅ HIGHER: Prevent overfitting
+    WARMUP_RATIO = 0.1  # ✅ GRADUAL WARMUP: Better convergence
+    
+    # ✅ ADVANCED TRAINING FEATURES
+    GRADIENT_ACCUMULATION_STEPS = 4  # Effective batch size = 16*4 = 64
+    MAX_GRAD_NORM = 1.0  # Gradient clipping
+    LABEL_SMOOTHING = 0.1  # Prevent overconfidence
     
     # Paths
     OUTPUT_DIR = "./memotion_results"
@@ -173,6 +180,9 @@ class EnhancedVisualBertClassifier(nn.Module):
         
         # Initialize weights
         self._init_weights()
+        
+        # ✅ FREEZE EARLY LAYERS TO PREVENT OVERFITTING
+        self._freeze_early_layers()
     
     def _init_weights(self):
         """Proper weight initialization"""
@@ -180,6 +190,15 @@ class EnhancedVisualBertClassifier(nn.Module):
             if isinstance(module, nn.Linear):
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
+    
+    def _freeze_early_layers(self):
+        """Freeze early VisualBERT layers to prevent overfitting"""
+        # Freeze first 6 layers of VisualBERT (out of 12)
+        for i, layer in enumerate(self.visual_bert.encoder.layer):
+            if i < 6:  # Freeze first half
+                for param in layer.parameters():
+                    param.requires_grad = False
+        print(f"🔒 Frozen first 6 layers of VisualBERT to prevent overfitting")
     
     def forward(self, input_ids, attention_mask, visual_embeds, visual_attention_mask, labels=None):
         outputs = self.visual_bert(
@@ -289,35 +308,55 @@ def main_optimized_visualbert_pipeline():
     print("🧠 Initializing Enhanced VisualBERT Classifier...")
     model = EnhancedVisualBertClassifier(num_labels=2).to(device)
     
-    # 7. Configure Training Arguments - ✅ FIXED API
+    # 7. Configure Training Arguments - ✅ IMPROVED TO FIX LOW ACCURACY
     training_args = TrainingArguments(
         output_dir=config.OUTPUT_DIR,
         num_train_epochs=config.NUM_EPOCHS,
+        
+        # ✅ IMPROVED BATCH CONFIGURATION
         per_device_train_batch_size=config.BATCH_SIZE,
         per_device_eval_batch_size=config.BATCH_SIZE,
-        warmup_steps=500,
-        weight_decay=0.01,
-        logging_dir='./logs',
-        logging_steps=100,
-        eval_strategy="epoch",  # ✅ NEW API: evaluation_strategy -> eval_strategy
-        save_strategy="epoch",
+        gradient_accumulation_steps=config.GRADIENT_ACCUMULATION_STEPS,  # Effective batch = 64
+        
+        # ✅ IMPROVED LEARNING RATE SCHEDULE
+        learning_rate=config.LEARNING_RATE,  # 5e-6 instead of 2e-5
+        weight_decay=config.WEIGHT_DECAY,    # 0.1 instead of 0.01
+        warmup_ratio=config.WARMUP_RATIO,    # 10% warmup
+        lr_scheduler_type="cosine",           # ✅ COSINE DECAY: Better than linear
+        
+        # ✅ REGULARIZATION TO PREVENT OVERFITTING
+        max_grad_norm=config.MAX_GRAD_NORM,       # Gradient clipping
+        label_smoothing_factor=config.LABEL_SMOOTHING,  # Prevent overconfidence
+        
+        # ✅ EARLY STOPPING & FREQUENT EVALUATION
+        eval_strategy="steps",        # Evaluate more frequently than epoch
+        eval_steps=100,              # Every 100 steps
+        save_strategy="steps",
+        save_steps=100,
         load_best_model_at_end=True,
-        metric_for_best_model="eval_accuracy",
+        metric_for_best_model="eval_f1",  # ✅ USE F1 INSTEAD OF ACCURACY
         greater_is_better=True,
-        fp16=True,  # Mixed precision for speed
-        dataloader_num_workers=2,
-        gradient_accumulation_steps=2,
-        save_total_limit=2,
+        
+        # Performance
+        fp16=True,                   # Mixed precision for speed
+        dataloader_num_workers=4,    # More workers
+        remove_unused_columns=False,
+        
+        # Logging
+        logging_dir='./logs_improved',
+        logging_steps=50,            # More frequent logging
+        save_total_limit=3,
         report_to=None
     )
     
-    # 8. Initialize Trainer
+    # 8. Initialize Trainer with Early Stopping
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_torch_dataset,
         eval_dataset=val_torch_dataset,
         compute_metrics=compute_metrics,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=5)]  # ✅ STOP OVERFITTING
     )
     
     # 9. Train model
