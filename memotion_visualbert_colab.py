@@ -825,9 +825,8 @@ def main_pipeline():
                 print(f"CUDA error during trainer initialization: {e}")
                 print("Switching to CPU and trying again...")
                 
-                # Move model to CPU
+                # Move model to CPU and update device
                 model = model.cpu()
-                global device
                 device = torch.device('cpu')
                 
                 # Update training args for CPU
